@@ -1,0 +1,3 @@
+unique_estimate: 2679652497.4892597
+total messages: 4986987037
+fraction: 0.5373289478412694

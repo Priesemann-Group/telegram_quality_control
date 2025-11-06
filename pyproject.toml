@@ -1,0 +1,92 @@
+[project]
+name = "telegram-quality-control"
+version = "0.1.0"
+description = "A collection of quality control scripts for the Telegram dataset."
+authors = [
+    {name = "Anastasia Golovin",email = "anastasia.golovin@ds.mpg.de"}
+]
+readme = "README.md"
+requires-python = ">=3.11,<3.15"
+dependencies = [
+    "dotenv (>=0.9.9,<0.10.0)",
+    "telegram-data-models @ git+https://github.com/Priesemann-Group/telegram_data_models.git",
+    "sqlalchemy (>=2.0.44,<3.0.0)",
+    "dask (>=2025.11.0,<2026.0.0)",
+    "numpy (>=1.22,<2.3)",
+    # "psycopg2 (>=2.9.11,<3.0.0)",
+    "psycopg2-binary (>=2.9.11,<3.0.0)",
+    "psycopg (>=3.2.12,<4.0.0)",
+    "polars (>=1.35.1,<2.0.0)",
+    "tqdm (>=4.67.1,<5.0.0)",
+    "pandas (>=2.3.3,<3.0.0)",
+    "pyarrow (>=22.0.0,<23.0.0)",
+    "huggingface-hub (>=0.34.0,<1.0)",
+    "ipywidgets (>=8.1.8,<9.0.0)",
+    "distributed (>=2025.11.0,<2026.0.0)",
+    "bokeh (>=3.8.0,<4.0.0)",
+    "fast-langdetect (>=1.0.0,<2.0.0)",
+    "matplotlib (>=3.10.8,<4.0.0)",
+    "cmcrameri (>=1.9,<2.0)",
+    "toml (>=0.10.2,<0.11.0)",
+    "urlextract (>=1.9.0,<2.0.0)",
+    "tldextract (>=5.3.0,<6.0.0)",
+    "pyahocorasick (>=2.2.0,<3.0.0)",
+    "fastparquet (>=2024.11.0,<2025.0.0)",
+    "ipython (>=9.8.0,<10.0.0)",
+    "jupyter (>=1.1.1,<2.0.0)",
+    "scikit-learn (>=1.8.0,<2.0.0)",
+    "wimbd (>=0.1.1,<0.2.0)",
+    "nltk (>=3.9.2,<4.0.0)",
+    "datasketch (>=1.8.0,<2.0.0)",
+    "statsmodels (>=0.14.6,<0.15.0)",
+    "numba (>=0.60.0,<0.64.0)", 
+    "pip (>=25.3,<26.0)",
+    "ipykernel (>=7.1.0,<8.0.0)",
+    "tiktoken (>=0.12.0,<0.13.0)",
+    "wordcloud (>=1.9.5,<2.0.0)",
+    "duckdb (>=1.4.3,<2.0.0)",
+]
+
+[project.optional-dependencies]
+# ML stuff
+cu130 = [
+    "torch (>=2.9.0,<3.0.0)",
+    "torchvision (>=0.20.0,<1.0.0)",
+    "torchaudio (>=2.5.0,<3.0.0)",
+    "accelerate (>=1.11.0,<2.0.0)",
+    "transformers (>=4.57.0,<5.0.0)",
+    "bertopic (>=0.16.4,<1.0.0)",
+    "scikit-learn (>=1.5.2,<2.0.0)",
+    "sentence-transformers (>=3.1.1,<4.0.0)",
+    "openai (>=2.14.0,<3.0.0)",
+    "umap-learn (>=0.5.6,<1.0.0)",
+    "hdbscan (>=0.8.41)",
+    "cudf-cu13 (>=25.12.0,<25.13.0)",
+    "cuml-cu13 (>=25.12.0,<25.13.0)",
+    "pylibcudf-cu13 (>=25.12.0,<25.13.0)",
+    "libcudf-cu13 (>=25.12.0,<25.13.0)",
+]
+
+erd = [
+    "eralchemy (>=1.6.0,<2.0)",
+    "graphviz (>=0.21,<0.22)",
+]
+
+[tool.poetry.dependencies]
+cudf-cu13 = {source = "nvidia"}
+cuml-cu13 = {source = "nvidia"}
+pylibcudf-cu13 = {source = "nvidia"}
+libcudf-cu13 = {source = "nvidia"}
+
+[[tool.poetry.source]]
+name = "nvidia"
+url = "https://pypi.nvidia.com"
+priority = "explicit"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.poetry]
+package-mode = true
+
