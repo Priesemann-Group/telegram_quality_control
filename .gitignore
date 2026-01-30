@@ -4,6 +4,7 @@ output
 .env
 credentials.env
 data/*.parquet
+data/preview_export
 notebooks/analysis/*.py
 *.pkl
 most_common_*-grams.json
