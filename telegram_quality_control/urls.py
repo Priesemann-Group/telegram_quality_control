@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import polars as pl
 import dask.dataframe as dd
 import toml
 import itertools
@@ -7,6 +8,9 @@ from pathlib import Path
 
 from urlextract import URLExtract
 import tldextract
+
+from dask.distributed import Client, LocalCluster
+import dask.dataframe as dd
 
 import ahocorasick
 
@@ -90,10 +94,50 @@ def batch_extract_urls(docs, remove_duplicates=True):
 # ======================================================================================
 # Assign reliability ratings to URLs based on a pre-defined table of domain ratings.
 
+# There are two ways on how to tackle this:
+# 1. Extract the domain from the URL using URL parsing libraries and then search for this domain
+# in the dataset
+# 2. Do not use any information from the URL structure. Instead, for every URL, find all domains
+# that are substrings of the URL
 
-def rate_url(url, domain_ratings_df, automaton, blacklist):
+# The problem with the first approach is that there is such a zoo of subdomains and
+# top-level-domains. For example, there's reuters.com, but also pictures.reuters.com,
+# graphics.reuters.com and uk.reuters.com, there's bbc.com, but also bbc.co.uk...
+# Furthermore, a few Facebook groups are mentioned explicitly in the Lasser dataset.
+# For example, "facebook.com/sadefenza" is in the dataset even though it's not a domain.
+
+# The problem with the second approach is that some domains are substrings of other domains. For
+# example, "al.com" is in the dataset and will match on "truthsocial.com", which is not in the dataset.
+
+# **What we do:** Use the second approach, but for every successful match extract the domain from
+# the URL and make sure that the domain is a substring of the match.
+
+
+def rate_url(
+    url: str,
+    domain_ratings_df: pl.DataFrame | pd.DataFrame,
+    automaton: ahocorasick.Automaton,
+    blacklist: list,
+    extended_result=False,
+):
+    """Rate a single URL based on the domain ratings table and the blacklist.
+
+    Args:
+        url (str): The URL to rate.
+        domain_ratings_df (pl.DataFrame | pd.DataFrame): The DataFrame containing domain ratings.
+        automaton (ahocorasick.Automaton): The automaton for domain matching.
+        blacklist (list): A list of blacklisted domains.
+        extended_result (bool, optional): if additional fields are awailable in the domain ratings table, include them in the result. Defaults to False.
+
+    Returns:
+        _type_: _description_
+    """
     result = {"domain": np.nan, "is_blacklisted": False, "reliability": np.nan}
-    result = pd.Series(result)
+    if extended_result:
+        result = {"domain": np.nan, "is_blacklisted": False, "reliability": np.nan}
+        for col in domain_ratings_df.columns:
+            if col not in result:
+                result[col] = np.nan
 
     if pd.isna(url):
         return result
@@ -117,45 +161,75 @@ def rate_url(url, domain_ratings_df, automaton, blacklist):
 
         result["domain"] = matched_domain
         result["is_blacklisted"] = matched_domain in blacklist
-        ranking = domain_ratings_df.loc[df_index]["reliability"]
+        ranking = domain_ratings_df[df_index, "reliability"]
         result["reliability"] = ranking
+        if extended_result:
+            for col in domain_ratings_df.columns:
+                if col not in ["domain", "reliability"]:
+                    result[col] = domain_ratings_df[df_index, col]
 
     return result
 
 
-def batch_rate_urls(urls, domain_ratings_df, automaton, blacklist, col=None):
-    if isinstance(urls, pd.Series):
-        rating_df = urls.apply(
-            lambda url: rate_url(url, domain_ratings_df, automaton, blacklist),
+def batch_rate_urls(url_df, url_col="url", version="updated", extended_result=False):
+    """
+    Rate all URLs in the input DataFrame using the domain ratings table.
+
+    Args:
+        urls (DataFrame): Input URLs to be rated.
+        version (str): The version of the domain ratings to use. Can be "updated" or "original".
+    """
+    domain_ratings_df, automaton, blacklist = load_rating_resources(version=version)
+
+    using_dask = isinstance(url_df, dd.DataFrame)
+    using_polars = isinstance(url_df, (pl.DataFrame, pl.Series))
+    using_pandas = isinstance(url_df, (pd.DataFrame, pd.Series))
+    if not (using_dask or using_polars or using_pandas):
+        raise ValueError(
+            "Input must be a Dask DataFrame, Polars DataFrame/Series, or Pandas DataFrame/Series."
         )
-        return rating_df
 
-    if isinstance(urls, (pd.DataFrame, dd.DataFrame)):
-        rating_df = urls.apply(
-            lambda url: rate_url(url[col], domain_ratings_df, automaton, blacklist),
-            axis='columns',
-            result_type="expand",
-        )
-        return rating_df
+    if using_dask:
+        print("Using Dask for parallel processing of URLs.")
+        result = url_df.map_partitions(batch_rate_urls, url_col=url_col, version=version, extended_result=extended_result)
+        return result
 
-    if isinstance(urls, list):
-        if all(isinstance(url, list) for url in urls):
-            # if urls is a list of lists:
-            rating = [
-                [rate_url(url, domain_ratings_df, automaton, blacklist) for url in sublist]
-                for sublist in urls
-            ]
-            rating = [pd.DataFrame(sublist) for sublist in rating]
-            return rating
-
-        else:
-            # If it's a flat list of URLs
-            rating = [rate_url(url, domain_ratings_df, automaton, blacklist) for url in urls]
-            rating = pd.DataFrame(rating)
-            return rating
-
+    if isinstance(url_df, (pd.Series, pl.Series)):
+        urls = url_df
     else:
-        raise TypeError("Unsupported datatype of the urls!")
+        urls = url_df[url_col]
+
+    if using_pandas:
+        meta = {"domain": "string", "is_blacklisted": bool, "reliability": "Float64"}
+        if extended_result:
+            for col in domain_ratings_df.columns:
+                if col not in meta.keys():
+                    meta[col] = "object"
+        result = pd.DataFrame(columns=list(meta.keys()), index=url_df.index)
+        result = result.astype(meta)
+        result["domain"] = None
+        result["is_blacklisted"] = False
+        result["reliability"] = np.nan
+
+        for id, url in urls.items():
+            row_result = rate_url(url, domain_ratings_df, automaton, blacklist, extended_result=extended_result)
+            result.loc[id] = row_result
+
+    elif using_polars:
+        meta = {"domain": pl.String, "is_blacklisted": pl.Boolean, "reliability": pl.Float64}
+        
+        if extended_result:
+            for col in domain_ratings_df.columns:
+                if col not in meta.keys():
+                    meta[col] = pl.Utf8
+
+        all_results = []
+        for id, url in enumerate(urls):
+            row_result = rate_url(url, domain_ratings_df, automaton, blacklist, extended_result=extended_result)
+            all_results.append(row_result)
+        result = pl.DataFrame(all_results, schema=meta)
+
+    return result
 
 
 def load_rating_resources(version="updated"):
@@ -166,21 +240,15 @@ def load_rating_resources(version="updated"):
 
     rating_path = resource_folder / "reliability" / version / "domain_ratings.csv"
 
-    # rating_path = Path(f"./resources/reliability/{version}/domain_ratings.csv")
-
-    domain_ratings_df = pd.read_csv(rating_path, header=0, usecols=['domain', 'pc1'])
-    domain_ratings_df = domain_ratings_df.rename(columns={"pc1": "reliability"})
+    domain_ratings_df = pl.read_csv(rating_path, has_header=True)
 
     # Sort values by decreasing length so that the longest domain names are checked first
-    domain_ratings_df = domain_ratings_df.sort_values(
-        by="domain", key=lambda series: series.str.len(), ascending=False
-    )
-    domain_ratings_df = domain_ratings_df.reset_index(drop=True)
+    domain_ratings_df = domain_ratings_df.sort(pl.col("domain").str.len_chars(), descending=True)
 
     automaton = ahocorasick.Automaton()
 
     # add all domains to the automaton
-    for i, row in domain_ratings_df.iterrows():
+    for i, row in enumerate(domain_ratings_df.iter_rows(named=True)):
         domain = row['domain']
         automaton.add_word(domain, (i, domain))
 
@@ -193,46 +261,3 @@ def load_rating_resources(version="updated"):
 
     return domain_ratings_df, automaton, blacklist
 
-
-if __name__ == "__main__":
-    # Example test case for batch_extract_urls
-    print("Testing batch_extract_urls function with different input types:")
-
-    # Sample data with URLs
-    text_samples = [
-        "Check out this website: reuters.com and also visit http://nytimes.com",
-        "No URLs in this text",
-        "Multiple occurrences of the same URL: https://telegram.org and https://telegram.org",
-        "Different URL formats: example.org, https://pandas.pydata.org/, and http://numpy.org",
-    ]
-
-    resources = load_rating_resources(version="updated")
-
-    # Test with a pandas Series
-    print("\n1. Testing with pandas Series:")
-    series_input = pd.Series(text_samples, name="messages")
-    series_input.index.name = "message_id"
-    series_results = batch_extract_urls(series_input)
-    print(series_results)
-
-    series_ratings = batch_rate_urls(series_results['url'], *resources)
-    print(series_ratings)
-
-    df_results = batch_rate_urls(series_results, *resources, col='url')
-    print(df_results)
-
-    # Test with a NumPy array
-    print("\n2. Testing with NumPy array:")
-    numpy_input = np.array(text_samples)
-    numpy_results = batch_extract_urls(numpy_input)
-    print(numpy_results)
-    numpy_ratings = batch_rate_urls(numpy_results, *resources)
-    print(numpy_ratings)
-
-    # Test with a list
-    print("\n3. Testing with a list:")
-    list_input = text_samples
-    list_results = batch_extract_urls(list_input)
-    print(list_results)
-    list_ratings = batch_rate_urls(list_results, *resources)
-    print(list_ratings)

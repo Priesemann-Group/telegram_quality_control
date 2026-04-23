@@ -4,6 +4,8 @@ import polars as pl
 from tqdm import tqdm
 from sklearn.neighbors import KernelDensity
 
+from typing import Callable
+
 from joblib import Parallel, delayed
 
 import matplotlib as mpl
@@ -14,7 +16,7 @@ import matplotlib.pyplot as plt
 # https://en.wikipedia.org/wiki/Kernel_density_estimation
 
 
-def kde_fit(data, bandwidth=0.05, num_samples=100, xmin=0, xmax=1, cluster_ids=None):
+def kde_fit(data, bandwidth=0.05, num_samples=100, xmin=0, xmax=1, cluster_ids=None, cluster_weight_map=None):
     """
     Gaussian Kernel Density Estimation (KDE) for a given 1D data array.
     """
@@ -46,149 +48,101 @@ def kde_fit(data, bandwidth=0.05, num_samples=100, xmin=0, xmax=1, cluster_ids=N
     weight_matrix = (
         1 / np.sqrt(sigma**2 * 2 * np.pi) * np.exp(-((x_points - X) ** 2) / (2 * sigma**2))
     )
+    
+    if (cluster_ids is not None) and (cluster_weight_map is not None):
+        cluster_weights = np.array([cluster_weight_map[id] for id in cluster_ids])
+        
+        # weigh points according to their cluster weights
+        weight_matrix = weight_matrix * cluster_weights
+    
     weight_matrix /= weight_matrix.sum().sum()
 
     prob = weight_matrix.sum(axis=1)
 
     prob = prob / np.sum(prob)  # Normalize the probabilities
 
-    # calculate the std of the distribution that one would get under bootstrapping
-    if cluster_ids is None:
-        # Var(f_KDE) = sum(W_ij^2) - 1 / N * (sum(W_ij))^2
-        var_kde = (weight_matrix**2).sum(axis=1) - 1 / weight_matrix.shape[1] * prob**2
-        std_kde = np.sqrt(var_kde)
-    else:
-        # m - category, M - num categories
-        # Var(f_KDE) = sum_i1 sum_i2 where m(i1) == m(i2) W_(j, i1) W_(j, i2) - 1 / M * (sum(W_ij))^2
-        unique_clusters = np.unique(cluster_ids)
-        num_clusters = len(np.unique(cluster_ids))
-        var_kde = np.zeros(num_samples)
-
-        # Sort the columns of the weight matrix by clusters
-        weight_matrix_sorted = weight_matrix.copy()
-        sortids = np.argsort(cluster_ids)
-        weight_matrix_sorted = weight_matrix_sorted[:, sortids]
-        cluster_ids = cluster_ids[sortids]
-
-        for id in unique_clusters:
-            mask = cluster_ids == id
-            var_kde += np.sum(weight_matrix_sorted[:, mask], axis=1) ** 2
-
-        var_kde -= 1 / num_clusters * prob**2
-        std_kde = np.sqrt(var_kde)
-
     x_points = x_points.flatten()
 
-    return x_points, prob, std_kde
+    return x_points, prob
 
 
-def kde_fit_streaming(data: pl.LazyFrame, column, **kwargs):
-
-    def wrapper(df):
-        result = kde_fit(df[column], bandwidth, **kwargs)
-
-    data.map_batches(wrapper, streamable=True)
-
-
-def boolean_conditional_kde(
+def kde_fit_clustered_bootstrap_CI(
     data: pd.DataFrame | pl.DataFrame,
-    boolean,
-    parameter,
-    bandwidth=0.05,
-    num_samples=100,
-    xmin=0,
-    xmax=1,
-    cluster_column=None,
+    value_col: str,
+    cluster_col: str,
+    *args,
+    quantile=0.95,
+    num_workers=1,
+    num_bootstrap=1000,
+    **kwargs,
 ):
-    """
-    Returns the probability that a boolean random variable is True given a condition.
-    P(boolean=True | condition)
+    # Helper function for one sample
+    def single_bootstrap(data, *args, seed=42, **kwargs):
+        # Get unique clusters
+        cluster_ids = data[cluster_col]
+        unique_clusters = cluster_ids.unique()
+        n_clusters = len(unique_clusters)
+        
+        rng = np.random.default_rng(seed)
 
-    data: DataFrame, the data containing the boolean and condition columns
-    boolean: str, column name of the boolean variable
-    condition: str, column name of the condition variable
-    """
+        # Resample clusters with replacement
+        sampled_clusters = rng.choice(unique_clusters, size=n_clusters, replace=True)
+        
+        weight_map = {}
+        
+        for cluster in unique_clusters:
+            weight_map[cluster] = np.sum(sampled_clusters == cluster)
+        
+        kwargs = {"cluster_ids": cluster_ids, "cluster_weight_map": weight_map} | kwargs
+        
+        _, prob = kde_fit(data[value_col], *args, **kwargs)
+        
+        return prob
 
-    if cluster_column is not None:
-        cluster_ids = data[cluster_column]
+    lower_bound, upper_bound = _abstract_bootstrap_CI(
+        single_bootstrap,
+        data,
+        *args,
+        quantile=quantile,
+        num_workers=num_workers,
+        num_bootstrap=num_bootstrap,
+        **kwargs,
+    )
+
+    return lower_bound, upper_bound
+
+
+def _abstract_bootstrap_CI(
+    single_bootstrap: Callable,
+    *args,
+    quantile=0.95,
+    num_workers=1,
+    num_bootstrap=1000,
+    **kwargs,
+):
+    """Helper function that abstracts away the common functionality between normal bootstrap and clustered bootstrap.
+
+    Args:
+        single_bootstrap (Callable): a function to compute one bootstrap iteration
+    """
+    bootstrap_samples = []
+    if num_workers == 1:
+        # Sequential execution
+        for i in tqdm(range(num_bootstrap)):
+            sample = single_bootstrap(*args, **kwargs)
+            bootstrap_samples.append(sample)
+
     else:
-        cluster_ids = None
+        # Parallel execution
+        bootstrap_samples = Parallel(
+            n_jobs=num_workers,
+            verbose=10,
+            batch_size=1,
+        )(delayed(single_bootstrap)(*args, seed=i, **kwargs) for i in range(num_bootstrap))
+    
+    bootstrap_samples = np.array(bootstrap_samples)
 
-    cond_mask = data[boolean]
+    lower_bound = np.quantile(bootstrap_samples, 0.5 - 0.5 * quantile, axis=0)
+    upper_bound = np.quantile(bootstrap_samples, 0.5 + 0.5 * quantile, axis=0)
 
-    # P(condition | boolean)
-    if type(data) is pd.DataFrame:
-        if cluster_column is not None:
-            cond_cluster_ids = cluster_ids[cond_mask]
-        else:
-            cond_cluster_ids = None
-
-        masked_data = data[cond_mask]
-
-    elif type(data) is pl.DataFrame:
-        if cluster_column is not None:
-            cond_cluster_ids = cluster_ids.filter(pl.col(boolean))
-        else:
-            cond_cluster_ids = None
-
-        masked_data = data.filter(pl.col(boolean))
-
-    x_points, likelihood, likelihood_std = kde_fit(
-        masked_data[parameter],
-        bandwidth=bandwidth,
-        cluster_ids=cond_cluster_ids,
-    )
-
-    # P(boolean, condition) = P(condition | boolean) * P(boolean)
-    frac_true = data[boolean].mean()
-    joint_prob = likelihood * frac_true / likelihood.sum()
-
-    # P(condition)
-    _, marginal_prob, marginal_prob_std = kde_fit(
-        data[parameter],
-        bandwidth=bandwidth,
-        cluster_ids=cluster_ids,
-    )
-
-    # P(boolean | condition) = P(boolean, condition) / P(condition)
-    conditional_prob = joint_prob / marginal_prob
-
-    # simple error propagation
-    conditional_prob_std = (frac_true / marginal_prob * likelihood_std) ** 2 + (
-        joint_prob / marginal_prob**2 * marginal_prob_std
-    ) ** 2
-    conditional_prob_std = np.sqrt(conditional_prob_std)
-
-    x_points = x_points.flatten()
-
-    return x_points, conditional_prob, conditional_prob_std
-
-
-def kde_fit_2D(datapoints, bandwidth, xlims, ylims, num_grid_points=30):
-    kde = KernelDensity(kernel='gaussian', bandwidth=bandwidth).fit(np.vstack(datapoints).T)
-
-    # create a grid to plot the density
-    x_points = np.linspace(*xlims, num_grid_points)
-    y_points = np.linspace(*ylims, num_grid_points)
-    x_grid, y_grid = np.meshgrid(x_points, y_points)
-    grid_points = np.vstack([x_grid.ravel(), y_grid.ravel()]).T
-
-    log_density = kde.score_samples(grid_points)
-    density = np.exp(log_density).reshape(x_grid.shape)
-    return x_grid, y_grid, density
-
-
-def plot_kde_2D(ax, x_grid, y_grid, density, cmap, levels=20):
-    cmap = plt.get_cmap(cmap)
-    cmap.set_under('white')
-    data_range = density.max() - density.min()
-    norm = mpl.colors.BoundaryNorm(
-        np.linspace(density.min() + 0.05 * data_range, density.max(), 100), cmap.N
-    )
-
-    contour_plot = ax.contourf(
-        x_grid, y_grid, density, levels=levels, cmap=cmap, norm=norm, extend='min'
-    )
-    contour_plot.set_zorder(-1)
-
-    return contour_plot
+    return lower_bound, upper_bound
