@@ -1,0 +1,43 @@
+name: telegram_database
+
+services:
+    db:
+        image: postgres:latest
+        hostname: database
+        container_name: database
+        secrets:
+          - db_password
+        # user: "${UID}:${GID}"
+        shm_size: 8g
+        environment:
+            TZ: Europe/Berlin
+            POSTGRES_USER: postgres
+            POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+        volumes:
+            - ./database:/var/lib/postgresql
+        networks:
+            - telegram-network
+        ports:
+            - "5432:5432"
+    pgadmin:
+        image: dpage/pgadmin4
+        hostname: pgadmin
+        container_name: pgadmin
+        environment:
+            PGADMIN_DEFAULT_EMAIL: anastasia.golovin@ds.mpg.de
+            PGADMIN_DEFAULT_PASSWORD: default_pw
+            TZ: Europe/Berlin
+        volumes:
+            - ./pgadmin_data:/var/lib/pgadmin
+        user: "${UID}:${GID}"
+        ports:
+            - 5050:80
+        networks:
+            - telegram-network
+networks:
+    telegram-network:
+      name: telegram-network
+
+secrets:
+  db_password:
+    file: db_password
