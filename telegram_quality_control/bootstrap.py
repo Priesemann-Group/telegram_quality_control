@@ -68,6 +68,7 @@ def cluster_bootstrap_CI(
     data: pd.DataFrame | pl.DataFrame,
     func: Callable,
     cluster_col: str,
+    weight_arg: str,
     *args,
     quantile=0.95,
     num_workers=1,
@@ -92,33 +93,42 @@ def cluster_bootstrap_CI(
     """
 
     # Helper function for one sample
-    def single_bootstrap(data, func, cluster_col, *args, **kwargs):
+    def single_bootstrap(data, func, cluster_col, weight_arg, *args, **kwargs):
         # Get unique clusters
         unique_clusters = data[cluster_col].unique()
         n_clusters = len(unique_clusters)
 
         # Resample clusters with replacement
         sampled_clusters = np.random.choice(unique_clusters, size=n_clusters, replace=True)
+        
+        weight_map = pd.Series(sampled_clusters).value_counts().to_dict()
 
-        # Reconstruct dataset from sampled clusters
-        if isinstance(data, (pd.DataFrame, pd.Series)):
-            bootstrap_sample = pd.concat(
-                [data[data[cluster_col] == cluster] for cluster in sampled_clusters],
-                ignore_index=True,
-            )
-        elif isinstance(data, (pl.DataFrame, pl.Series)):
-            bootstrap_sample = pl.concat(
-                [data.filter(pl.col(cluster_col) == cluster) for cluster in sampled_clusters]
-            )
+        # # Reconstruct dataset from sampled clusters
+        # if isinstance(data, (pd.DataFrame, pd.Series)):
+        #     bootstrap_sample = pd.concat(
+        #         [data[data[cluster_col] == cluster] for cluster in sampled_clusters],
+        #         ignore_index=True,
+        #     )
+        # elif isinstance(data, (pl.DataFrame, pl.Series)):
+        #     bootstrap_sample = (
+        #         pl.DataFrame({cluster_col: sampled_clusters})
+        #         .with_row_index("_bid")
+        #         .join(data, on=cluster_col, how="left")
+        #         .drop("_bid")
+        #     )
 
         # Compute statistic on bootstrap sample
-        return func(bootstrap_sample, *args, **kwargs)
+        
+        kwargs[weight_arg] = weight_map
+        
+        return func(data, *args, **kwargs)
 
     lower_bound, upper_bound = _abstract_bootstrap_CI(
         single_bootstrap,
         data,
         func,
         cluster_col,
+        weight_arg,
         *args,
         quantile=quantile,
         num_workers=num_workers,
