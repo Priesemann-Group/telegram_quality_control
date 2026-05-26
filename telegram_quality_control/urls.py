@@ -171,13 +171,13 @@ def rate_url(
     return result
 
 
-def batch_rate_urls(url_df, url_col="url", version="updated", extended_result=False):
+def batch_rate_urls(url_df, url_col="url", version="original", extended_result=False):
     """
     Rate all URLs in the input DataFrame using the domain ratings table.
 
     Args:
         urls (DataFrame): Input URLs to be rated.
-        version (str): The version of the domain ratings to use. Can be "updated" or "original".
+        version (str): The version of the domain ratings to use.
     """
     domain_ratings_df, automaton, blacklist = load_rating_resources(version=version)
 
@@ -232,7 +232,7 @@ def batch_rate_urls(url_df, url_col="url", version="updated", extended_result=Fa
     return result
 
 
-def load_rating_resources(version="updated"):
+def load_rating_resources(version="original"):
     if version not in ["updated", "original"]:
         raise ValueError("Invalid ranking version. Choose 'updated' or 'original'.")
 
