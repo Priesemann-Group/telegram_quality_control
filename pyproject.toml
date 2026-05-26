@@ -9,7 +9,7 @@ readme = "README.md"
 requires-python = ">=3.11,<3.15"
 dependencies = [
     "dotenv (>=0.9.9,<0.10.0)",
-    "telegram-data-models (>=1.0.0)",
+    "telegram-data-models @ git+https://github.com/Priesemann-Group/telegram_data_models.git@derived_tables",
     "sqlalchemy (>=2.0.44,<3.0.0)",
     "dask (>=2025.11.0,<2026.0.0)",
     "numpy (>=1.22,<2.3)",
@@ -82,7 +82,6 @@ cudf-cu13 = {source = "nvidia"}
 cuml-cu13 = {source = "nvidia"}
 pylibcudf-cu13 = {source = "nvidia"}
 libcudf-cu13 = {source = "nvidia"}
-telegram-data-models = { path = "../data_models", develop = true }
 
 [[tool.poetry.source]]
 name = "nvidia"
