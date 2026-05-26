@@ -6,7 +6,7 @@ This is a [datasheet](https://arxiv.org/abs/1803.09010) for the Telegram dataset
 @misc{TeraGram,
   title = {TeraGram: A Structured Longitudinal Dataset of the Telegram Messenger},
   author = {Golovin, Anastasia and Mohr, Sebastian B. and Gottwald, Arne I. and Hvid, Ulrik and Trivedi, Srushhti and Neto, Joao P. and Schneider, Andreas C. and Priesemann, Viola},
-  note = {in review},
+  note = {accepted to ICWSM 2026},
 }
 ```
 

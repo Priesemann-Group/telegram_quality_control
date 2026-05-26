@@ -4,11 +4,15 @@ output
 .env
 credentials.env
 data/*.parquet
+data/*.csv
+data/*/*.csv
 data/preview_export
 notebooks/analysis/*.py
 *.pkl
 most_common_*-grams.json
+notebooks/*/*.py
 
+__MACOSX
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
